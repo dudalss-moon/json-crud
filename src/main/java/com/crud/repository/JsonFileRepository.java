@@ -14,9 +14,15 @@ import java.util.Optional;
 
 /**
  * JSON 파일을 영속 저장소로 사용하는 CRUD 리포지토리.
- * 데이터는 [{...}, {...}] 형태의 JSON 배열로 저장된다.
+ *
+ * 파일 포맷: {"seq": N, "items": [{...}, ...]}
+ *   - seq  : 지금까지 발급한 최대 ID (삭제 후에도 감소하지 않아 ID 재사용을 방지)
+ *   - items: 현재 저장된 데이터 배열
  */
 public class JsonFileRepository {
+
+    private static final String KEY_SEQ   = "seq";
+    private static final String KEY_ITEMS = "items";
 
     private final Path filePath;
 
@@ -28,31 +34,31 @@ public class JsonFileRepository {
     // ── Create ───────────────────────────────────────────────────────
 
     public Item create(JsonObject data) {
-        JsonArray records = loadAll();
-        long newId = nextId(records);
+        JsonObject wrapper = loadWrapper();
+        JsonArray  items   = wrapper.getArray(KEY_ITEMS);
+        long       newId   = wrapper.getLong(KEY_SEQ) + 1;
+
         data.put("id", newId);
-        records.add(data);
-        persist(records);
+        items.add(data);
+        wrapper.put(KEY_SEQ, newId);
+        saveWrapper(wrapper);
         return new Item(data);
     }
 
     // ── Read ─────────────────────────────────────────────────────────
 
     public List<Item> findAll() {
-        JsonArray records = loadAll();
         List<Item> result = new ArrayList<>();
-        for (JsonValue v : records) {
+        for (JsonValue v : loadWrapper().getArray(KEY_ITEMS)) {
             result.add(new Item(v.asObject()));
         }
         return result;
     }
 
     public Optional<Item> findById(long id) {
-        for (JsonValue v : loadAll()) {
+        for (JsonValue v : loadWrapper().getArray(KEY_ITEMS)) {
             JsonObject obj = v.asObject();
-            if (obj.getLong("id") == id) {
-                return Optional.of(new Item(obj));
-            }
+            if (obj.getLong("id") == id) return Optional.of(new Item(obj));
         }
         return Optional.empty();
     }
@@ -62,18 +68,14 @@ public class JsonFileRepository {
      */
     public List<Item> searchByField(String key, String keyword) {
         List<Item> result = new ArrayList<>();
-        String lowerKeyword = keyword.toLowerCase();
-        for (JsonValue v : loadAll()) {
+        String lower = keyword.toLowerCase();
+        for (JsonValue v : loadWrapper().getArray(KEY_ITEMS)) {
             JsonObject obj = v.asObject();
             if (!obj.has(key)) continue;
             JsonValue fieldVal = obj.get(key);
             if (fieldVal.isNull()) continue;
-            String fieldStr = fieldVal.isString()
-                    ? fieldVal.asString()
-                    : fieldVal.toJsonString();
-            if (fieldStr.toLowerCase().contains(lowerKeyword)) {
-                result.add(new Item(obj));
-            }
+            String fieldStr = fieldVal.isString() ? fieldVal.asString() : fieldVal.toJsonString();
+            if (fieldStr.toLowerCase().contains(lower)) result.add(new Item(obj));
         }
         return result;
     }
@@ -86,12 +88,12 @@ public class JsonFileRepository {
      */
     public boolean update(long id, String key, String value) {
         if ("id".equals(key)) return false;
-        JsonArray records = loadAll();
-        for (JsonValue v : records) {
+        JsonObject wrapper = loadWrapper();
+        for (JsonValue v : wrapper.getArray(KEY_ITEMS)) {
             JsonObject obj = v.asObject();
             if (obj.getLong("id") == id) {
                 obj.put(key, value);
-                persist(records);
+                saveWrapper(wrapper);
                 return true;
             }
         }
@@ -101,18 +103,20 @@ public class JsonFileRepository {
     // ── Delete ───────────────────────────────────────────────────────
 
     public boolean delete(long id) {
-        JsonArray records = loadAll();
-        JsonArray updated = Json.array();
-        boolean found = false;
-        for (JsonValue v : records) {
+        JsonObject wrapper  = loadWrapper();
+        JsonArray  items    = wrapper.getArray(KEY_ITEMS);
+        JsonArray  filtered = Json.array();
+        boolean    found    = false;
+
+        for (JsonValue v : items) {
             JsonObject obj = v.asObject();
-            if (obj.getLong("id") == id) {
-                found = true;
-            } else {
-                updated.add(obj);
-            }
+            if (obj.getLong("id") == id) found = true;
+            else filtered.add(obj);
         }
-        if (found) persist(updated);
+        if (found) {
+            wrapper.put(KEY_ITEMS, filtered);
+            saveWrapper(wrapper);
+        }
         return found;
     }
 
@@ -120,24 +124,21 @@ public class JsonFileRepository {
 
     private void initFile() {
         if (!Files.exists(filePath)) {
-            persist(Json.array());
+            saveWrapper(emptyWrapper());
         }
     }
 
-    private JsonArray loadAll() {
-        return Json.loadArray(filePath);
+    private JsonObject loadWrapper() {
+        return Json.loadObject(filePath);
     }
 
-    private void persist(JsonArray records) {
-        Json.savePretty(records, filePath);
+    private void saveWrapper(JsonObject wrapper) {
+        Json.savePretty(wrapper, filePath);
     }
 
-    private long nextId(JsonArray records) {
-        long max = 0;
-        for (JsonValue v : records) {
-            long id = v.asObject().getLong("id");
-            if (id > max) max = id;
-        }
-        return max + 1;
+    private static JsonObject emptyWrapper() {
+        return Json.object()
+                .put(KEY_SEQ, 0L)
+                .put(KEY_ITEMS, Json.array());
     }
 }
