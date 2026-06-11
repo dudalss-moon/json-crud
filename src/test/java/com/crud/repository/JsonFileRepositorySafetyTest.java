@@ -366,7 +366,7 @@ class JsonFileRepositorySafetyTest {
     void update_thenSearch_findsByNewValue() {
         repo.create(obj("name", "Alice"));
         repo.update(1L, "name", "Alicia");
-        assertTrue(repo.searchByField("name", "Alicia").size() == 1);
+        assertEquals(1, repo.searchByField("name", "Alicia").size());
         assertTrue(repo.searchByField("name", "Alice").isEmpty());  // 이전 값 사라짐
     }
 
